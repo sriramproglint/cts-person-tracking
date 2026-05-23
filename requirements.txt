@@ -1,0 +1,7 @@
+# Requirements for RT-DETR person detection script
+opencv-python>=4.5
+numpy>=1.21
+onnxruntime>=1.9
+
+# Optional (for GPU users install the GPU build matching your CUDA):
+# onnxruntime-gpu>=1.9
