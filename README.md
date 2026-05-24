@@ -1,51 +1,218 @@
-# RT-DETR person detection — Setup & Run
+# Person Tracking (RT-DETR + StrongSORT)
 
-This repository contains a standalone RT-DETR person detection script: `rtdetr_person_detect.py`.
+Detect and track people in video with **stable IDs**. Supports **ONNX Runtime** or **TensorRT** backends.
 
-**Prerequisites**
-- Linux or macOS (Windows should work with minor path changes)
-- Python 3.8+ (3.10 recommended)
-- Optional GPU: CUDA and matching `onnxruntime-gpu`
+## Folder structure
 
-**Quick setup (recommended: virtualenv)**
+```
+CTS-Person-Tracking/
+├── run.py                    # Entry point — run this
+├── config.py                 # All defaults (paths, detection, tracking, display)
+├── pipeline.py               # Detection + tracking loop
+├── person_tracker.py         # StrongSORT (shared by both backends)
+├── tracking_report.py        # ID stability / swap / fragmentation report
+├── report/
+│   ├── generate_html.py      # HTML dashboard generator
+│   ├── json_to_html.py       # JSON → HTML converter
+│   └── serve.py              # localhost static server
+├── gpu_runtime.py            # CUDA library paths (DGX Spark)
+│
+├── backends/
+│   ├── decode.py             # Shared RT-DETR output decode
+│   ├── onnx/
+│   │   └── detector.py       # ONNX Runtime inference
+│   └── tensorrt/
+│       └── detector.py       # TensorRT engine build + inference
+│
+├── scripts/
+│   └── build_tensorrt_engine.py
+│
+├── model.onnx                # RT-DETR model (place in repo root)
+├── model.trt                 # TensorRT engine (build or copy)
+└── output_front.mp4          # Sample video
+```
+
+## Setup
+
 ```bash
+cd CTS-Person-Tracking
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip
 pip install -r requirements.txt
-# If you have CUDA and want GPU acceleration:
-# pip install onnxruntime-gpu
 ```
 
-**Place the ONNX model**
-The script expects `model.onnx` by default at `scripts/model.onnx`. You can also specify a different path with `--onnx`.
+Place **`model.onnx`** in the repo root.
 
-**Run (examples)**
-- Run on a single image:
+### Optional: TensorRT backend
+
 ```bash
-python3 rtdetr_person_detect.py --image /path/to/frame.jpg
+pip install tensorrt pycuda onnx
+python scripts/build_tensorrt_engine.py
 ```
-- Run on a video file (CPU or GPU selection shown):
+
+### Optional: ONNX Runtime GPU (DGX Spark / GB10)
+
+Standard `onnxruntime-gpu` may not include sm_121 kernels. Build a custom wheel:
+
 ```bash
-python3 rtdetr_person_detect.py --video clip.mp4 --device auto
-# or force GPU
-python3 rtdetr_person_detect.py --video clip.mp4 --device cuda
+bash scripts/build_onnxruntime_gpu_gb10.sh   # if available
+pip install wheels/onnxruntime_gpu-*-linux_aarch64.whl
 ```
-- Run webcam (device index 0):
+
+---
+
+## Run commands (future reference)
+
+Activate the venv first:
+
 ```bash
-python3 rtdetr_person_detect.py --camera 0
+source .venv/bin/activate
 ```
 
-**Useful flags**
-- `--onnx PATH` : path to ONNX model
-- `--device {auto,cpu,cuda}` : runtime provider (auto prefers CUDA if available)
-- `--fast` : preset for faster inference (`--stride 2`, network orig-size)
-- `--stride N` : run inference every N frames (reduces CPU/GPU load)
-- `--no-display` : skip cv2.imshow (useful for headless benchmarking)
-- `--save PATH` : save annotated image/video to PATH
+### Quick start
 
-**Notes**
-- For GPU acceleration install `onnxruntime-gpu` matching your CUDA driver.
-- `requirements.txt` lists core deps: `opencv-python`, `numpy`, `onnxruntime`.
+```bash
+# Default: track people in output_front.mp4 (auto-picks backend)
+python run.py
 
-If you want, I can also add a small script to download a sample `model.onnx` or an example video.
+# Specific video (auto-saves output_front_tracked.mp4 with frame # + person IDs)
+python run.py --video output_front.mp4
+
+# Custom output path
+python run.py --video output_front.mp4 --save my_annotated.mp4
+```
+
+### ONNX Runtime
+
+```bash
+# CPU — works end-to-end on GB10 today (~1–2 fps on 3072×3072 video)
+python run.py --video output_front.mp4 --backend ort --device cpu
+
+# GPU (requires GB10-compatible onnxruntime-gpu build)
+python run.py --video output_front.mp4 --backend ort --device cuda
+
+# Detection only (no StrongSORT IDs)
+python run.py --video output_front.mp4 --backend ort --device cpu --no-track
+```
+
+### TensorRT
+
+```bash
+# Build engine from ONNX (once)
+python scripts/build_tensorrt_engine.py --onnx model.onnx --engine model.trt
+
+# Track with TensorRT + GPU ReID (when model.trt exists)
+python run.py --video output_front.mp4 --backend tensorrt
+
+# Auto-build engine if missing
+python run.py --video output_front.mp4 --backend tensorrt --build-trt
+```
+
+### GPU-only mode
+
+Uses TensorRT when `model.trt` exists, otherwise ORT CUDA + GPU ReID:
+
+```bash
+python run.py --video output_front.mp4 --gpu-only
+```
+
+### Save / headless
+
+```bash
+# Save annotated video, no preview window
+python run.py --video output_front.mp4 --save tracked.mp4 --no-display
+
+# Limit frames (testing)
+python run.py --video output_front.mp4 --max-frames 100 --no-display
+```
+
+### Webcam / image
+
+```bash
+python run.py --camera 0
+python run.py --image frame.jpg --save out.jpg
+```
+
+**Preview controls:** `q` = quit, `space` = pause
+
+### Tracking quality report (HTML dashboard)
+
+After a tracked run, reports are saved automatically:
+
+- **`tracking_report.json`** — raw data
+- **`tracking_report.html`** — visual dashboard (open in browser)
+
+```bash
+# Run video and generate reports
+python run.py --video output_front.mp4 --no-display
+
+# Custom report names (creates my_report.json + my_report.html)
+python run.py --video output_front.mp4 --report-json my_report.json --no-display
+
+# Open the HTML file directly
+xdg-open tracking_report.html
+# or
+firefox tracking_report.html
+```
+
+**Localhost server** (optional):
+
+```bash
+python report/serve.py --port 8765
+# Then open http://localhost:8765/my_report.html
+```
+
+**Rebuild HTML from existing JSON:**
+
+```bash
+python report/json_to_html.py my_report.json
+```
+
+The HTML dashboard shows:
+
+| Section | Content |
+|---------|---------|
+| Summary cards | Stability score, stable IDs, swaps, fragmentation |
+| Metrics legend | What each metric means |
+| Chart | Detections vs tracks per frame |
+| Swap table | Frame + ID pairs where crossings may have swapped IDs |
+| Fragmentation table | New ID born where another ID recently vanished |
+| Per-ID journey | Coverage bars, status badges (Stable / Has gaps / Short-lived) |
+
+---
+
+## Configuration
+
+Edit **`config.py`** for defaults. CLI flags override at runtime.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ONNX_PATH` | `model.onnx` | ONNX model path |
+| `ENGINE_PATH` | `model.trt` | TensorRT engine path |
+| `CONF_THRESHOLD` | 0.30 | Detection score threshold |
+| `TRACK_MAX_AGE` | 120 | Frames to keep lost IDs |
+| `TRACK_MAX_COS_DIST` | 0.26 | ReID strictness (lower = fewer ID swaps) |
+| `BACKEND` | auto | `tensorrt` if engine exists, else `ort` |
+
+---
+
+## GB10 / DGX Spark notes
+
+| Backend | Status |
+|---------|--------|
+| ORT CPU + tracking | Works |
+| ORT CUDA (custom GB10 build) | Fails at postprocessor `Cast` until patched |
+| TensorRT pip 10.16 | ONNX parses; engine build may fail (sm_121 CASK) |
+| TensorRT + tracking (when engine exists) | ~14–19 fps on sample video |
+
+Recommended today on GB10:
+
+```bash
+python run.py --video output_front.mp4 --backend ort --device cpu
+```
+
+When `model.trt` is available:
+
+```bash
+python run.py --video output_front.mp4 --backend tensorrt
+```

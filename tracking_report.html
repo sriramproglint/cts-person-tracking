@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracking Quality Report</title>
+  <style>
+    :root {
+      --bg:#0f1419; --card:#1a2332; --border:#2d3a4d; --text:#e7ecf3;
+      --muted:#8b9cb3; --accent:#3b82f6; --green:#22c55e; --amber:#f59e0b; --red:#ef4444;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:system-ui,sans-serif; background:var(--bg); color:var(--text);
+      padding:1.5rem; max-width:1200px; margin:0 auto; line-height:1.5; }
+    h1 { font-size:1.75rem; }
+    .subtitle { color:var(--muted); margin:0.25rem 0 1.5rem; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:1rem; }
+    .card .label { font-size:0.75rem; color:var(--muted); text-transform:uppercase; }
+    .card .value { font-size:1.75rem; font-weight:700; margin-top:0.25rem; }
+    .card .hint { font-size:0.8rem; color:var(--muted); margin-top:0.35rem; }
+    .score-good { color:var(--green); } .score-mid { color:var(--amber); } .score-bad { color:var(--red); }
+    section { background:var(--card); border:1px solid var(--border); border-radius:10px;
+      padding:1.25rem; margin-bottom:1.25rem; }
+    section h2 { font-size:1.1rem; margin-bottom:1rem; padding-bottom:0.5rem; border-bottom:1px solid var(--border); }
+    table { width:100%; border-collapse:collapse; font-size:0.875rem; }
+    th,td { text-align:left; padding:0.55rem 0.65rem; border-bottom:1px solid var(--border); }
+    th { color:var(--muted); font-size:0.75rem; text-transform:uppercase; }
+    tr:hover td { background:rgba(255,255,255,0.03); }
+    .badge { display:inline-block; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.7rem; font-weight:600; }
+    .badge-stable { background:rgba(34,197,94,0.2); color:var(--green); }
+    .badge-gaps { background:rgba(245,158,11,0.2); color:var(--amber); }
+    .badge-short { background:rgba(239,68,68,0.2); color:var(--red); }
+    .legend { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:0.75rem; }
+    .legend-item { padding:0.75rem; background:rgba(0,0,0,0.2); border-radius:8px; font-size:0.85rem; }
+    .legend-item strong { display:block; margin-bottom:0.25rem; color:var(--accent); }
+    .chart-wrap { height:180px; } canvas { width:100%; height:100%; display:block; }
+    .empty { color:var(--muted); font-style:italic; }
+    .bar-cell { display:flex; align-items:center; gap:0.5rem; }
+    .mini-bar { width:100px; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+    .mini-bar span { display:block; height:100%; background:var(--accent); }
+    footer { text-align:center; color:var(--muted); font-size:0.8rem; margin-top:2rem; }
+    #file-load { display:none; margin-bottom:1rem; padding:0.75rem; border:1px dashed var(--border); border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div id="file-load">Load JSON: <input type="file" id="json-file" accept=".json"></div>
+  <h1>Tracking Quality Report</h1>
+  <p class="subtitle" id="meta">Person detection + StrongSORT ID stability</p>
+  <div class="cards" id="summary-cards"></div>
+  <section>
+    <h2>What the metrics mean</h2>
+    <div class="legend">
+      <div class="legend-item"><strong>ID stability score</strong>Percent of IDs that stayed long with high frame coverage.</div>
+      <div class="legend-item"><strong>Suspected ID swaps</strong>Two people were close; centroids look like IDs switched.</div>
+      <div class="legend-item"><strong>Suspected fragmentation</strong>New ID appeared where another ID recently vanished.</div>
+      <div class="legend-item"><strong>Per-ID journey</strong>First/last frame, coverage %, gaps, longest streak.</div>
+      <div class="legend-item"><strong>Unmatched detections</strong>Detector found more people than confirmed tracks (n_init delay).</div>
+    </div>
+  </section>
+  <section>
+    <h2>Detections vs tracks (per frame)</h2>
+    <div class="chart-wrap"><canvas id="chart"></canvas></div>
+  </section>
+  <section>
+    <h2>Suspected ID swaps</h2>
+    <p class="empty" id="swaps-empty">No swaps detected.</p>
+    <table id="swaps-table" style="display:none"><thead><tr>
+      <th>Frame</th><th>IDs</th><th>Distance</th><th>Confidence</th><th>Keep cost</th><th>Swap cost</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>Suspected fragmentation</h2>
+    <p class="empty" id="frag-empty">No fragmentation detected.</p>
+    <table id="frag-table" style="display:none"><thead><tr>
+      <th>Frame</th><th>New ID</th><th>Lost ID</th><th>Gap</th><th>Distance (px)</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <section>
+    <h2>Per-ID journey</h2>
+    <table id="ids-table"><thead><tr>
+      <th>ID</th><th>Frames</th><th>Seen</th><th>Coverage</th><th>Best streak</th><th>Avg score</th><th>Status</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+  <footer>CTS-Person-Tracking</footer>
+  <script>
+    const EMBEDDED = {"summary": {"frames_processed": 80, "unique_ids": 11, "stable_ids": 7, "short_lived_ids": 3, "fragmented_ids": 3, "suspected_swaps": 0, "suspected_fragments": 1, "detection": {"avg_per_frame": 7.71, "max_per_frame": 10, "min_per_frame": 6}, "tracking": {"avg_per_frame": 6.89, "max_per_frame": 9, "min_per_frame": 0}, "unmatched_detections": {"total": 66, "frames_with_unmatched": 37, "pct_frames": 46.2}, "id_stability_score": 63.6}, "suspected_swaps": [], "suspected_fragments": [{"frame": 55, "new_id": 29, "lost_id": 15, "frames_since_lost": 2, "distance_px": 52.4}], "per_id": [{"track_id": 1, "first_frame": 4, "last_frame": 80, "frames_seen": 77, "span_frames": 77, "gaps": 0, "longest_streak": 77, "avg_score": 0.871, "stability_pct": 100.0}, {"track_id": 2, "first_frame": 4, "last_frame": 80, "frames_seen": 77, "span_frames": 77, "gaps": 0, "longest_streak": 77, "avg_score": 0.845, "stability_pct": 100.0}, {"track_id": 3, "first_frame": 4, "last_frame": 80, "frames_seen": 77, "span_frames": 77, "gaps": 0, "longest_streak": 77, "avg_score": 0.747, "stability_pct": 100.0}, {"track_id": 4, "first_frame": 4, "last_frame": 80, "frames_seen": 77, "span_frames": 77, "gaps": 0, "longest_streak": 77, "avg_score": 0.708, "stability_pct": 100.0}, {"track_id": 5, "first_frame": 4, "last_frame": 80, "frames_seen": 53, "span_frames": 77, "gaps": 4, "longest_streak": 26, "avg_score": 0.517, "stability_pct": 68.8}, {"track_id": 6, "first_frame": 4, "last_frame": 48, "frames_seen": 45, "span_frames": 45, "gaps": 0, "longest_streak": 45, "avg_score": 0.621, "stability_pct": 100.0}, {"track_id": 10, "first_frame": 14, "last_frame": 80, "frames_seen": 67, "span_frames": 67, "gaps": 0, "longest_streak": 67, "avg_score": 0.827, "stability_pct": 100.0}, {"track_id": 13, "first_frame": 18, "last_frame": 48, "frames_seen": 5, "span_frames": 31, "gaps": 2, "longest_streak": 3, "avg_score": 0.327, "stability_pct": 16.1}, {"track_id": 15, "first_frame": 22, "last_frame": 52, "frames_seen": 31, "span_frames": 31, "gaps": 0, "longest_streak": 31, "avg_score": 0.554, "stability_pct": 100.0}, {"track_id": 17, "first_frame": 27, "last_frame": 76, "frames_seen": 16, "span_frames": 50, "gaps": 4, "longest_streak": 7, "avg_score": 0.318, "stability_pct": 32.0}, {"track_id": 29, "first_frame": 55, "last_frame": 80, "frames_seen": 26, "span_frames": 26, "gaps": 0, "longest_streak": 26, "avg_score": 0.795, "stability_pct": 100.0}], "per_frame": [{"frame": 1, "num_dets": 7, "num_tracks": 0, "unmatched_dets": 7, "active_ids": []}, {"frame": 2, "num_dets": 7, "num_tracks": 0, "unmatched_dets": 7, "active_ids": []}, {"frame": 3, "num_dets": 8, "num_tracks": 0, "unmatched_dets": 8, "active_ids": []}, {"frame": 4, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 5, "num_dets": 7, "num_tracks": 6, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 6, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 7, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 8, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 9, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 10, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 11, "num_dets": 7, "num_tracks": 6, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 12, "num_dets": 8, "num_tracks": 6, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 13, "num_dets": 9, "num_tracks": 6, "unmatched_dets": 3, "active_ids": [1, 2, 3, 4, 5, 6]}, {"frame": 14, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 15, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 16, "num_dets": 9, "num_tracks": 7, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 17, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 18, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6, 10, 13]}, {"frame": 19, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 20, "num_dets": 9, "num_tracks": 7, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 21, "num_dets": 9, "num_tracks": 7, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6, 10]}, {"frame": 22, "num_dets": 9, "num_tracks": 8, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 23, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 24, "num_dets": 9, "num_tracks": 8, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 25, "num_dets": 9, "num_tracks": 8, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 26, "num_dets": 10, "num_tracks": 8, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 27, "num_dets": 10, "num_tracks": 9, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15, 17]}, {"frame": 28, "num_dets": 10, "num_tracks": 9, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15, 17]}, {"frame": 29, "num_dets": 9, "num_tracks": 9, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15, 17]}, {"frame": 30, "num_dets": 9, "num_tracks": 9, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 13, 15, 17]}, {"frame": 31, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 32, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 33, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 34, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 35, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 36, "num_dets": 10, "num_tracks": 8, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 6, 10, 15]}, {"frame": 37, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 38, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 39, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 40, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 41, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 42, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 43, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 44, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 45, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 15]}, {"frame": 46, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 13, 15]}, {"frame": 47, "num_dets": 9, "num_tracks": 9, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 6, 10, 13, 15, 17]}, {"frame": 48, "num_dets": 9, "num_tracks": 8, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 6, 10, 13, 15]}, {"frame": 49, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 15, 17]}, {"frame": 50, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 15, 17]}, {"frame": 51, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 15, 17]}, {"frame": 52, "num_dets": 10, "num_tracks": 8, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 10, 15, 17]}, {"frame": 53, "num_dets": 9, "num_tracks": 7, "unmatched_dets": 2, "active_ids": [1, 2, 3, 4, 5, 10, 17]}, {"frame": 54, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 17]}, {"frame": 55, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 17, 29]}, {"frame": 56, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 57, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 17, 29]}, {"frame": 58, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 17, 29]}, {"frame": 59, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 17, 29]}, {"frame": 60, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 61, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 62, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 63, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 64, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 65, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 66, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 67, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 68, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 69, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 70, "num_dets": 7, "num_tracks": 6, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 71, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 72, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 73, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 74, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 75, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 76, "num_dets": 8, "num_tracks": 8, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 17, 29]}, {"frame": 77, "num_dets": 7, "num_tracks": 7, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 78, "num_dets": 6, "num_tracks": 6, "unmatched_dets": 0, "active_ids": [1, 2, 3, 4, 10, 29]}, {"frame": 79, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 29]}, {"frame": 80, "num_dets": 8, "num_tracks": 7, "unmatched_dets": 1, "active_ids": [1, 2, 3, 4, 5, 10, 29]}]};
+    function scoreClass(p) { return p >= 70 ? "score-good" : p >= 40 ? "score-mid" : "score-bad"; }
+    function idBadge(r, sf) {
+      if (r.frames_seen < sf) return ["short","Short-lived"];
+      if (r.gaps > 0) return ["gaps","Has gaps"];
+      if (r.stability_pct >= 90) return ["stable","Stable"];
+      return ["gaps","Partial"];
+    }
+    function render(data) {
+      const s = data.summary || {};
+      const sf = 30;
+      document.getElementById("meta").textContent =
+        (s.frames_processed||0) + " frames · " + (s.unique_ids||0) + " IDs · stability " + (s.id_stability_score||0) + "%";
+      const cards = [
+        ["Stability score", (s.id_stability_score||0)+"%", "Higher = better", scoreClass(s.id_stability_score||0)],
+        ["Stable IDs", s.stable_ids??"—", "Long + high coverage", ""],
+        ["Unique IDs", s.unique_ids??"—", "Total created", ""],
+        ["ID swaps", s.suspected_swaps??0, "At crossings", s.suspected_swaps>0?"score-bad":"score-good"],
+        ["Fragmentation", s.suspected_fragments??0, "ID after occlusion", ""],
+        ["Avg dets/tracks", (s.detection?.avg_per_frame??"—")+" / "+(s.tracking?.avg_per_frame??"—"), "Per frame", ""]
+      ];
+      document.getElementById("summary-cards").innerHTML = cards.map(function(c) {
+        return '<div class="card"><div class="label">'+c[0]+'</div><div class="value '+c[3]+'">'+c[1]+'</div><div class="hint">'+c[2]+'</div></div>';
+      }).join("");
+      const swaps = data.suspected_swaps||[];
+      if (swaps.length) {
+        document.getElementById("swaps-empty").style.display="none";
+        var t=document.getElementById("swaps-table"); t.style.display="table";
+        t.querySelector("tbody").innerHTML=swaps.map(function(e) {
+          return "<tr><td>"+e.frame+"</td><td>ID "+e.id_a+" &harr; ID "+e.id_b+"</td><td>"+e.distance_px+" px</td><td>"+Math.round(e.confidence*100)+"%</td><td>"+e.same_cost+" px</td><td>"+e.swap_cost+" px</td></tr>";
+        }).join("");
+      }
+      const frags = data.suspected_fragments||[];
+      if (frags.length) {
+        document.getElementById("frag-empty").style.display="none";
+        var t2=document.getElementById("frag-table"); t2.style.display="table";
+        t2.querySelector("tbody").innerHTML=frags.map(function(e) {
+          return "<tr><td>"+e.frame+"</td><td>ID "+e.new_id+"</td><td>ID "+e.lost_id+"</td><td>"+e.frames_since_lost+"f</td><td>"+e.distance_px+" px</td></tr>";
+        }).join("");
+      }
+      const ids=(data.per_id||[]).slice().sort(function(a,b){ return b.frames_seen-a.frames_seen || b.stability_pct-a.stability_pct; });
+      document.getElementById("ids-table").querySelector("tbody").innerHTML=ids.map(function(r) {
+        var b=idBadge(r,sf);
+        return "<tr><td><strong>ID "+r.track_id+"</strong></td><td>"+r.first_frame+"–"+r.last_frame+"</td><td>"+r.frames_seen+"/"+r.span_frames+"</td>"+
+          "<td><div class=\"bar-cell\">"+r.stability_pct+"%<div class=\"mini-bar\"><span style=\"width:"+Math.min(100,r.stability_pct)+"%\"></span></div></div></td>"+
+          "<td>"+r.longest_streak+"</td><td>"+r.avg_score.toFixed(2)+"</td><td><span class=\"badge badge-"+b[0]+"\">"+b[1]+"</span></td></tr>";
+      }).join("");
+      drawChart(data.per_frame||[]);
+    }
+    function drawChart(frames) {
+      if (!frames.length) return;
+      var canvas=document.getElementById("chart"), ctx=canvas.getContext("2d");
+      var dpr=window.devicePixelRatio||1, rect=canvas.parentElement.getBoundingClientRect();
+      canvas.width=rect.width*dpr; canvas.height=rect.height*dpr; ctx.scale(dpr,dpr);
+      var W=rect.width,H=rect.height, pad={l:40,r:12,t:12,b:28};
+      var maxY=Math.max.apply(null,[1].concat(frames.map(function(f){ return Math.max(f.num_dets,f.num_tracks); })))+1;
+      var step=(W-pad.l-pad.r)/Math.max(1,frames.length-1);
+      function x(i){ return pad.l+i*step; }
+      function y(v){ return pad.t+(H-pad.t-pad.b)*(1-v/maxY); }
+      ctx.clearRect(0,0,W,H); ctx.strokeStyle="#2d3a4d";
+      for(var g=0;g<=4;g++){ var gy=pad.t+(H-pad.t-pad.b)*g/4; ctx.beginPath(); ctx.moveTo(pad.l,gy); ctx.lineTo(W-pad.r,gy); ctx.stroke(); }
+      function line(key,color){ ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); frames.forEach(function(f,i){ var px=x(i),py=y(f[key]); if(i)ctx.lineTo(px,py); else ctx.moveTo(px,py); }); ctx.stroke(); }
+      line("num_dets","#3b82f6"); line("num_tracks","#22c55e");
+      ctx.fillStyle="#8b9cb3"; ctx.font="11px system-ui"; ctx.fillText("Detections",pad.l,H-8);
+      ctx.fillStyle="#22c55e"; ctx.fillText("Tracks",pad.l+80,H-8);
+    }
+    if (EMBEDDED && EMBEDDED.summary) { render(EMBEDDED); }
+    else {
+      document.getElementById("file-load").style.display="block";
+      document.getElementById("json-file").addEventListener("change",function(e) {
+        var f=e.target.files[0]; if(!f)return;
+        var r=new FileReader();
+        r.onload=function(){ try{ render(JSON.parse(r.result)); }catch(err){ alert("Invalid JSON"); } };
+        r.readAsText(f);
+      });
+    }
+  </script>
+</body>
+</html>

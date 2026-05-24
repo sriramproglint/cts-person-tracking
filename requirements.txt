@@ -1,7 +1,17 @@
-# Requirements for RT-DETR person detection script
+# Core
 opencv-python>=4.5
 numpy>=1.21
 onnxruntime>=1.9
 
-# Optional (for GPU users install the GPU build matching your CUDA):
-# onnxruntime-gpu>=1.9
+# Tracking (StrongSORT)
+boxmot>=13.0
+torch>=2.0
+torchvision>=0.15
+
+# TensorRT backend (optional — pip install when using --backend tensorrt)
+# tensorrt>=10.16
+# pycuda>=2024.1
+# onnx>=1.16
+
+# GPU: install onnxruntime-gpu matching your CUDA, or use the GB10 wheel:
+#   bash scripts/build_onnxruntime_gpu_gb10.sh
