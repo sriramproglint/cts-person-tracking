@@ -301,9 +301,9 @@ class TrackingReport:
             "",
             "How to read this:",
             "  - Stable IDs with high % coverage = good persistent tracking",
-            "  - Suspected swaps at crossings = tune TRACK_MAX_COS_DIST in config.py (lower=stricter)",
+            "  - Suspected swaps at crossings = tune APPEARANCE_THRESH in config.py (lower=stricter)",
             "  - Fragmentation = same person got a new ID after occlusion",
-            "  - Unmatched detections = detector found person not yet confirmed by tracker (n_init)",
+            "  - Unmatched detections = detector found person not yet confirmed by tracker",
             "=" * 60,
         ])
         return "\n".join(lines)

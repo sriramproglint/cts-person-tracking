@@ -9,11 +9,11 @@ from pathlib import Path
 import cv2
 
 from config import AppConfig, DEFAULT_VIDEO, ENGINE_PATH, ONNX_PATH
-from pipeline import PersonPipeline, run_on_source
+from pipeline import PersonPipeline, run_on_source, save_reports
 
 
 def parse_args() -> AppConfig:
-    p = argparse.ArgumentParser(description="RT-DETR person detection + StrongSORT tracking")
+    p = argparse.ArgumentParser(description="RT-DETR person detection + BoTSORT tracking")
     src = p.add_mutually_exclusive_group()
     src.add_argument("--video", type=str, help=f"Video file (default: {DEFAULT_VIDEO.name})")
     src.add_argument("--image", type=str, help="Single image")
@@ -24,7 +24,9 @@ def parse_args() -> AppConfig:
     p.add_argument("--onnx", type=Path, default=ONNX_PATH)
     p.add_argument("--engine", type=Path, default=ENGINE_PATH)
     p.add_argument("--conf", type=float, default=None)
-    p.add_argument("--no-track", action="store_true", help="Detection only (no StrongSORT)")
+    p.add_argument("--no-track", action="store_true", help="Detection only (no tracking)")
+    p.add_argument("--no-fastreid", action="store_true", help="Disable FastReID, use OSNet fallback")
+    p.add_argument("--fastreid-weights", type=str, default="", help="Path to FastReID .pth weights")
     p.add_argument("--gpu-only", action="store_true", help="CUDA only; prefer TensorRT if engine exists")
     p.add_argument("--build-trt", action="store_true", help="Build TensorRT engine from ONNX if missing")
     p.add_argument("--save", type=str, default="", help="Output video/image path (default: <video>_tracked.mp4)")
@@ -56,6 +58,9 @@ def parse_args() -> AppConfig:
     if args.conf is not None:
         cfg.conf = args.conf
     cfg.track = not args.no_track
+    cfg.fastreid_enabled = not args.no_fastreid
+    if args.fastreid_weights:
+        cfg.fastreid_weights = args.fastreid_weights
     cfg.gpu_only = args.gpu_only
     cfg.build_trt_if_missing = args.build_trt
     cfg.save = args.save
@@ -87,6 +92,7 @@ def run_image(cfg: AppConfig, pipeline: PersonPipeline) -> None:
         print("Press any key to close…")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+    save_reports(cfg, pipeline)
 
 
 def main() -> None:
@@ -110,7 +116,11 @@ def main() -> None:
     pipeline = PersonPipeline(cfg)
     print(pipeline.runtime_info)
     if cfg.track:
-        print(f"StrongSORT  max_age={cfg.track_max_age}  max_cos_dist={cfg.track_max_cos_dist}")
+        reid_label = "FastReID SBS R50-IBN" if cfg.fastreid_enabled else f"OSNet ({cfg.reid_weights})"
+        print(
+            f"BoTSORT  reid={reid_label}  buffer={cfg.track_buffer}"
+            f"  new_track_thresh={cfg.new_track_thresh}  appearance={cfg.appearance_thresh}"
+        )
     save_out = cfg.save or cfg.resolve_output_video()
     print(f"source={cfg.source}  backend={backend}  conf={cfg.conf}  track={cfg.track}")
     if save_out:

@@ -61,7 +61,7 @@ def render_report_html(payload: dict, *, title: str = "Tracking Quality Report")
 <body>
   <div id="file-load">Load JSON: <input type="file" id="json-file" accept=".json"></div>
   <h1>Tracking Quality Report</h1>
-  <p class="subtitle" id="meta">Person detection + StrongSORT ID stability</p>
+  <p class="subtitle" id="meta">Person detection + BoTSORT ID stability</p>
   <div class="cards" id="summary-cards"></div>
   <section>
     <h2>What the metrics mean</h2>

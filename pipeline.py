@@ -1,4 +1,4 @@
-"""Unified detection + StrongSORT pipeline (ORT or TensorRT)."""
+"""Unified detection + BoTSORT pipeline (ORT or TensorRT)."""
 
 from __future__ import annotations
 
@@ -15,13 +15,8 @@ import gpu_runtime
 gpu_runtime.configure_gpu_environment()
 
 from config import (
-    TRACK_EMA_ALPHA,
-    TRACK_MAX_IOU_DIST,
-    TRACK_MC_LAMBDA,
     TRACK_MERGE_DISTANCE_PX,
     TRACK_MERGE_MAX_GAP,
-    TRACK_N_INIT,
-    TRACK_NN_BUDGET,
     AppConfig,
 )
 from person_tracker import Detection, StrongSortPersonTracker, Track, TrackConfig
@@ -44,7 +39,7 @@ def resolve_track_device(requested: str, *, gpu_only: bool = False) -> str:
     except ImportError:
         pass
     if gpu_only:
-        raise SystemExit("GPU-only mode requires CUDA for StrongSORT ReID.")
+        raise SystemExit("GPU-only mode requires CUDA for tracker ReID.")
     return "cpu"
 
 
@@ -98,7 +93,7 @@ def draw_detections(frame_bgr: np.ndarray, dets: list[Detection]) -> np.ndarray:
 
 
 class PersonPipeline:
-    """Detect persons and optionally track with stable StrongSORT IDs."""
+    """Detect persons and optionally track with stable BoTSORT IDs."""
 
     def __init__(self, cfg: AppConfig) -> None:
         self.cfg = cfg
@@ -115,15 +110,20 @@ class PersonPipeline:
             self._tracker = StrongSortPersonTracker(
                 TrackConfig(
                     reid_weights=cfg.reid_weights,
+                    fastreid_enabled=cfg.fastreid_enabled,
+                    fastreid_weights=cfg.fastreid_weights,
+                    embed_smooth=cfg.embed_smooth,
+                    embed_history=cfg.embed_history,
+                    embed_ema_alpha=cfg.embed_ema_alpha,
                     device=device,
                     det_conf=cfg.conf,
-                    max_age=cfg.track_max_age,
-                    n_init=TRACK_N_INIT,
-                    max_cos_dist=cfg.track_max_cos_dist,
-                    max_iou_dist=TRACK_MAX_IOU_DIST,
-                    nn_budget=TRACK_NN_BUDGET,
-                    mc_lambda=TRACK_MC_LAMBDA,
-                    ema_alpha=TRACK_EMA_ALPHA,
+                    track_high_thresh=cfg.track_high_thresh,
+                    track_low_thresh=cfg.track_low_thresh,
+                    new_track_thresh=cfg.new_track_thresh,
+                    track_buffer=cfg.track_buffer,
+                    match_thresh=cfg.match_thresh,
+                    proximity_thresh=cfg.proximity_thresh,
+                    appearance_thresh=cfg.appearance_thresh,
                     merge_max_gap=TRACK_MERGE_MAX_GAP,
                     merge_distance_px=TRACK_MERGE_DISTANCE_PX,
                     half=(device != "cpu"),
@@ -258,15 +258,22 @@ def run_on_source(cfg: AppConfig, pipeline: PersonPipeline) -> None:
         print(f"Saved annotated video: {save_path}")
     if cfg.display:
         cv2.destroyAllWindows()
-    if pipeline._tracker and pipeline.report is not None:
-        print(pipeline.report.format_text())
-        json_path = Path(cfg.report_json) if cfg.report_json else Path("tracking_report.json")
-        html_path = Path(cfg.report_html) if cfg.report_html else json_path.with_suffix(".html")
-        pipeline.report.save_json(json_path)
-        print(f"Report JSON saved: {json_path}")
-        pipeline.report.save_html(html_path)
-        print(f"Report HTML saved: {html_path}")
-        print(f"Open in browser: file://{html_path.resolve()}")
-        if cfg.report_csv:
-            pipeline.report.save_csv(cfg.report_csv)
-            print(f"Report CSV saved: {cfg.report_csv}")
+    save_reports(cfg, pipeline)
+
+
+def save_reports(cfg: AppConfig, pipeline: PersonPipeline) -> None:
+    """Save tracking report (JSON + HTML + optional CSV). Called after every run."""
+    if not pipeline._tracker or pipeline.report is None:
+        return
+    print(f"\n{pipeline._tracker.merge_stats}")
+    print(pipeline.report.format_text())
+    json_path = Path(cfg.report_json) if cfg.report_json else Path("tracking_report.json")
+    html_path = Path(cfg.report_html) if cfg.report_html else json_path.with_suffix(".html")
+    pipeline.report.save_json(json_path)
+    print(f"Report JSON saved: {json_path}")
+    pipeline.report.save_html(html_path)
+    print(f"Report HTML saved: {html_path}")
+    print(f"Open in browser: file://{html_path.resolve()}")
+    if cfg.report_csv:
+        pipeline.report.save_csv(cfg.report_csv)
+        print(f"Report CSV saved: {cfg.report_csv}")

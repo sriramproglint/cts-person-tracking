@@ -22,20 +22,38 @@ BACKEND = "auto"  # auto | ort | tensorrt
 ORT_DEVICE = "auto"  # auto | cpu | cuda
 BUILD_TRT_IF_MISSING = False
 
-# --- tracking (StrongSORT stable IDs) ---
+# --- tracking (BoTSORT — IoU-first matching prevents swaps during close crossings) ---
 TRACK_ENABLED = True
-REID_WEIGHTS = "osnet_x0_25_msmt17.pt"
+REID_WEIGHTS = "osnet_x0_25_msmt17.pt"  # fallback when FastReID disabled
 TRACK_DEVICE = "auto"  # auto | cpu | cuda
-TRACK_MAX_AGE = 120
-TRACK_N_INIT = 4
-TRACK_MAX_COS_DIST = 0.28
-TRACK_MAX_IOU_DIST = 0.62  # looser IoU → re-match after 1-frame miss via Kalman prediction
-TRACK_NN_BUDGET = 250
-TRACK_MC_LAMBDA = 0.998  # favor motion prediction during brief occlusion
-TRACK_EMA_ALPHA = 0.82
-# Short-gap ID merge: if StrongSORT creates new ID within this many frames, keep old ID
-TRACK_MERGE_MAX_GAP = 2  # merge when gap < 2 frames (0 or 1 frame gap)
-TRACK_MERGE_DISTANCE_PX = 120.0
+# BoTSORT association thresholds
+TRACK_HIGH_THRESH = 0.40   # detections above this get appearance+IoU matching (first pass)
+TRACK_LOW_THRESH = 0.1     # detections between low/high get IoU-only matching (second pass)
+NEW_TRACK_THRESH = 0.55    # higher bar for new IDs — prefer re-association over new ID
+TRACK_BUFFER = 900         # frames to keep lost tracks alive (30 sec — retail dwell time)
+MATCH_THRESH = 0.85        # Hungarian assignment cost threshold
+PROXIMITY_THRESH = 0.5     # IoU gate: block appearance matching for close pairs (anti-swap)
+APPEARANCE_THRESH = 0.35   # max embedding distance for appearance re-identification
+CMC_METHOD = None           # disabled for static surveillance camera (avoids noise)
+FRAME_RATE = 30            # used to scale track_buffer internally
+FUSE_FIRST_ASSOCIATE = True  # fuse detection confidence into IoU distance (prefer high-conf)
+# Short-gap ID merge: spatial re-association for brief tracker misses
+TRACK_MERGE_MAX_GAP = 60   # merge across gaps up to 2 seconds (at 30fps)
+TRACK_MERGE_DISTANCE_PX = 250.0  # spatial radius for re-association (dedup prevents false merges)
+# Appearance-based re-identification: catches long-gap re-entries the spatial merger misses
+# ONLY merges into IDs that are currently LOST (not visible on screen)
+REID_MERGE_COSINE_THRESH = 0.22  # cosine distance threshold (0.22 = 78% similarity required)
+REID_MERGE_MAX_AGE = 900   # keep features for up to 30 seconds after track lost
+REID_MERGE_MIN_LOST = 3    # target track must be lost for at least this many frames
+
+# --- FastReID (replaces OSNet for much stronger person re-identification) ---
+FASTREID_ENABLED = True
+FASTREID_WEIGHTS = ""  # empty → auto-download SBS R50-IBN MSMT17
+FASTREID_INPUT_SIZE = (384, 128)  # (H, W)
+# Embedding smoothing: EMA over last N frames instead of noisy single-frame features
+EMBED_SMOOTH = True
+EMBED_HISTORY = 20   # number of raw embeddings to keep per detection slot
+EMBED_EMA_ALPHA = 0.9  # higher → smoother / slower to adapt (0.0 = raw, 1.0 = never update)
 SHOW_TRAILS = True
 TRAIL_LENGTH = 40
 
@@ -76,9 +94,19 @@ class AppConfig:
     stride: int = STRIDE
     track: bool = TRACK_ENABLED
     reid_weights: str = REID_WEIGHTS
+    fastreid_enabled: bool = FASTREID_ENABLED
+    fastreid_weights: str = FASTREID_WEIGHTS
+    embed_smooth: bool = EMBED_SMOOTH
+    embed_history: int = EMBED_HISTORY
+    embed_ema_alpha: float = EMBED_EMA_ALPHA
     track_device: str = TRACK_DEVICE
-    track_max_age: int = TRACK_MAX_AGE
-    track_max_cos_dist: float = TRACK_MAX_COS_DIST
+    track_high_thresh: float = TRACK_HIGH_THRESH
+    track_low_thresh: float = TRACK_LOW_THRESH
+    new_track_thresh: float = NEW_TRACK_THRESH
+    track_buffer: int = TRACK_BUFFER
+    match_thresh: float = MATCH_THRESH
+    proximity_thresh: float = PROXIMITY_THRESH
+    appearance_thresh: float = APPEARANCE_THRESH
     show_trails: bool = SHOW_TRAILS
     trail_length: int = TRAIL_LENGTH
     gpu_only: bool = GPU_ONLY

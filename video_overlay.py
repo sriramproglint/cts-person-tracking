@@ -56,23 +56,14 @@ def draw_tracks_bold(
     *,
     trails: dict[int, list[tuple[int, int]]] | None = None,
 ) -> np.ndarray:
-    """Draw tracks with thick boxes and large high-contrast ID labels."""
-    if not tracks and not trails:
+    """Draw tracks with thick boxes and compact high-contrast ID labels."""
+    if not tracks:
         return frame_bgr
 
     vis = frame_bgr.copy()
     h, w = vis.shape[:2]
     font_scale, line_th, box_th = _scale_for_frame(h, w)
     id_font = font_scale * 1.15
-
-    if trails:
-        trail_th = max(2, box_th - 1)
-        for track_id, points in trails.items():
-            if len(points) < 2:
-                continue
-            color = _color_for_id(track_id)
-            for i in range(1, len(points)):
-                cv2.line(vis, points[i - 1], points[i], color, trail_th, cv2.LINE_AA)
 
     for track_id, _cls, score, x1, y1, x2, y2 in tracks:
         color = _color_for_id(track_id)
@@ -104,14 +95,5 @@ def draw_tracks_bold(
             vis, sub, (lx + 8, ty + th2 + 4), cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.55,
             (220, 220, 220), line_th, cv2.LINE_AA,
         )
-
-        # Large ID watermark inside box (center) for crowded scenes
-        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-        id_only = str(track_id)
-        (iw, ih), _ = cv2.getTextSize(id_only, cv2.FONT_HERSHEY_DUPLEX, id_font * 1.4, line_th + 2)
-        ix, iy = cx - iw // 2, cy + ih // 2
-        if (x2 - x1) > iw + 20 and (y2 - y1) > ih + 20:
-            cv2.putText(vis, id_only, (ix, iy), cv2.FONT_HERSHEY_DUPLEX, id_font * 1.4, (0, 0, 0), line_th + 4, cv2.LINE_AA)
-            cv2.putText(vis, id_only, (ix, iy), cv2.FONT_HERSHEY_DUPLEX, id_font * 1.4, color, line_th + 1, cv2.LINE_AA)
 
     return vis
